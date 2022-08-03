@@ -67,7 +67,7 @@ class Task():
         self.progress = 0
         self._rewards = 0
 
-        self.assets_root = None
+        self.assets_root = "./cliport/envs/assets/"
 
     def reset(self, env):  # pylint: disable=unused-argument
         if not self.assets_root:
@@ -77,6 +77,78 @@ class Task():
         self.lang_goals = []
         self.progress = 0  # Task progression metric in range [0, 1].
         self._rewards = 0  # Cumulative returned rewards.
+
+    def done(self):
+        return (len(self.goals) == 0) or (self._rewards > 0.99)  # pylint: disable=g-explicit-length-test
+
+    def reward(self):
+        """Get delta rewards for current timestep.
+        Returns:
+            A tuple consisting of the scalar (delta) reward, plus `extras`
+            dict which has extra task-dependent info from the process of
+            computing rewards that gives us finer-grained details. Use
+            `extras` for further data analysis.
+        """
+        reward, info = 0, {}
+
+        # Unpack next goal step.
+        objs, matches, targs, _, _, metric, params, max_reward = self.goals[0]
+
+        # Evaluate by matching object poses.
+        if metric == 'pose':
+            step_reward = 0
+            for i in range(len(objs)):
+                object_id, (symmetry, _) = objs[i]
+                pose = p.getBasePositionAndOrientation(object_id)
+                targets_i = np.argwhere(matches[i, :]).reshape(-1)
+                for j in targets_i:
+                    target_pose = targs[j]
+                    if self.is_match(pose, target_pose, symmetry):
+                        step_reward += max_reward / len(objs)
+                        break
+
+        # Evaluate by measuring object intersection with zone.
+        elif metric == 'zone':
+            zone_pts, total_pts = 0, 0
+            obj_pts, zones = params
+            for zone_idx, (zone_pose, zone_size) in enumerate(zones):
+
+                # Count valid points in zone.
+                for obj_idx, obj_id in enumerate(obj_pts):
+                    pts = obj_pts[obj_id]
+                    obj_pose = p.getBasePositionAndOrientation(obj_id)
+                    world_to_zone = invert(zone_pose)
+                    obj_to_zone = multiply(world_to_zone, obj_pose)
+                    pts = np.float32(apply(obj_to_zone, pts))
+                    if len(zone_size) > 1:
+                        valid_pts = np.logical_and.reduce([
+                            pts[0, :] > -zone_size[0] / 2, pts[0, :] < zone_size[0] / 2,
+                            pts[1, :] > -zone_size[1] / 2, pts[1, :] < zone_size[1] / 2,
+                            pts[2, :] < self.zone_bounds[2, 1]])
+
+                    # if zone_idx == matches[obj_idx].argmax():
+                    zone_pts += np.sum(np.float32(valid_pts))
+                    total_pts += pts.shape[1]
+            step_reward = max_reward * (zone_pts / total_pts)
+
+        # Get cumulative rewards and return delta.
+        reward = self.progress + step_reward - self._rewards
+        self._rewards = self.progress + step_reward
+
+        # Move to next goal step if current goal step is complete.
+        if np.abs(max_reward - step_reward) < 0.01:
+            self.progress += max_reward  # Update task progress.
+            self.goals.pop(0)
+            if len(self.lang_goals) > 0:
+                self.lang_goals.pop(0)
+
+        return reward, info
+
+    def get_lang_goal(self):
+        if len(self.lang_goals) == 0:
+            return self.task_completed_desc
+        else:
+            return self.lang_goals[0]
 
     def oracle(self, env):
         """Oracle agent."""

@@ -306,7 +306,6 @@ class Environment(gym.Env):
         return info
 
     def set_task(self, task):
-        task.set_assets_root(self.assets_root)
         self.task = task
 
     def get_lang_goal(self):
