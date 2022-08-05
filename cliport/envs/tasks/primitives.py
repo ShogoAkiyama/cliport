@@ -1,9 +1,7 @@
 import numpy as np
 
-from cliport.dataset.utils import (
-    eulerXYZ_to_quatXYZW,
-    multiply
-)
+from cliport.envs.tasks.utils import Utils
+from cliport.envs.tasks.transform import Transforms
 
 
 class PickPlace():
@@ -12,9 +10,8 @@ class PickPlace():
     def __init__(self, height=0.32, speed=0.01):
         self.height, self.speed = height, speed
 
-    def __call__(self, movej, movep, ee, pose0, pose1):
+    def __call__(self, movep, ee, pose0, pose1):
         """Execute pick and place primitive.
-    
         Args:
             movej: function to move robot joints.
             movep: function to move robot end effector pose.
@@ -31,18 +28,18 @@ class PickPlace():
         # Execute picking primitive.
         prepick_to_pick = ((0, 0, 0.32), (0, 0, 0, 1))
         postpick_to_pick = ((0, 0, self.height), (0, 0, 0, 1))
-        prepick_pose = multiply(pick_pose, prepick_to_pick)
-        postpick_pose = multiply(pick_pose, postpick_to_pick)
+        prepick_pose = Utils.multiply(pick_pose, prepick_to_pick)
+        postpick_pose = Utils.multiply(pick_pose, postpick_to_pick)
         timeout = movep(prepick_pose)
 
         # Move towards pick pose until contact is detected.
         delta = (
             np.float32([0, 0, -0.001]),
-            eulerXYZ_to_quatXYZW((0, 0, 0))
+            Transforms.eulerXYZ_to_quatXYZW((0, 0, 0))
         )
         targ_pose = prepick_pose
         while not ee.detect_contact():  # and target_pose[2] > 0:
-            targ_pose = multiply(targ_pose, delta)
+            targ_pose = Utils.multiply(targ_pose, delta)
             timeout |= movep(targ_pose)
             if timeout:
                 return True
@@ -56,11 +53,11 @@ class PickPlace():
         if pick_success:
             preplace_to_place = ((0, 0, self.height), (0, 0, 0, 1))
             postplace_to_place = ((0, 0, 0.32), (0, 0, 0, 1))
-            preplace_pose = multiply(place_pose, preplace_to_place)
-            postplace_pose = multiply(place_pose, postplace_to_place)
+            preplace_pose = Utils.multiply(place_pose, preplace_to_place)
+            postplace_pose = Utils.multiply(place_pose, postplace_to_place)
             targ_pose = preplace_pose
             while not ee.detect_contact():
-                targ_pose = multiply(targ_pose, delta)
+                targ_pose = Utils.multiply(targ_pose, delta)
                 timeout |= movep(targ_pose, self.speed)
                 if timeout:
                     return True
@@ -73,45 +70,3 @@ class PickPlace():
             timeout |= movep(prepick_pose)
 
         return timeout
-
-
-def push(movej, movep, ee, pose0, pose1):  # pylint: disable=unused-argument
-    """Execute pushing primitive.
-
-    Args:
-        movej: function to move robot joints.
-        movep: function to move robot end effector pose.
-        ee: robot end effector.
-        pose0: SE(3) starting pose.
-        pose1: SE(3) ending pose.
-
-    Returns:
-        timeout: robot movement timed out if True.
-    """
-
-    # Adjust push start and end positions.
-    pos0 = np.float32((pose0[0][0], pose0[0][1], 0.005))
-    pos1 = np.float32((pose1[0][0], pose1[0][1], 0.005))
-    vec = np.float32(pos1) - np.float32(pos0)
-    length = np.linalg.norm(vec)
-    vec = vec / length
-    pos0 -= vec * 0.02
-    pos1 -= vec * 0.05
-
-    # Align spatula against push direction.
-    theta = np.arctan2(vec[1], vec[0])
-    rot = eulerXYZ_to_quatXYZW((0, 0, theta))
-
-    over0 = (pos0[0], pos0[1], 0.31)
-    over1 = (pos1[0], pos1[1], 0.31)
-
-    # Execute push.
-    timeout = movep((over0, rot))
-    timeout |= movep((pos0, rot))
-    n_push = np.int32(np.floor(np.linalg.norm(pos1 - pos0) / 0.01))
-    for _ in range(n_push):
-        target = pos0 + vec * n_push * 0.01
-        timeout |= movep((target, rot), speed=0.003)
-    timeout |= movep((pos1, rot), speed=0.003)
-    timeout |= movep((over1, rot))
-    return timeout

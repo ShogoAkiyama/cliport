@@ -1,9 +1,8 @@
 import os
-
 import numpy as np
 import pybullet as p
 
-from cliport.utils import load_urdf
+from cliport.envs.utils import load_urdf
 
 SPATULA_BASE_URDF = 'ur5/spatula/spatula-base.urdf'
 SUCTION_BASE_URDF = 'ur5/suction/suction-base.urdf'
