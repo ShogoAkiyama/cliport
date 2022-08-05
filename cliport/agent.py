@@ -4,10 +4,10 @@ import torch
 import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 
-from cliport.dataset.utils import pix_to_xyz, eulerXYZ_to_quatXYZW
 from cliport.utils import set_seed
 from cliport.models.transport.two_stream_transport_lang_fusion import TwoStreamTransportLangFusionLat
 from cliport.models.attention.two_stream_attention_lang_fusion import TwoStreamAttentionLangFusionLat
+from cliport.envs.tasks.transform import Transforms
 
 
 class TwoStreamClipLingUNetLatTransporterAgent(LightningModule):
@@ -182,10 +182,10 @@ class TwoStreamClipLingUNetLatTransporterAgent(LightningModule):
 
         # Pixels to end effector poses.
         hmap = img[:, :, 3]
-        p0_xyz = pix_to_xyz(p0_pix, hmap, self.bounds, self.pix_size)
-        p1_xyz = pix_to_xyz(p1_pix, hmap, self.bounds, self.pix_size)
-        p0_xyzw = eulerXYZ_to_quatXYZW((0, 0, -p0_theta))
-        p1_xyzw = eulerXYZ_to_quatXYZW((0, 0, -p1_theta))
+        p0_xyz = Transforms.pix_to_xyz(p0_pix, hmap, self.bounds, self.pix_size)
+        p1_xyz = Transforms.pix_to_xyz(p1_pix, hmap, self.bounds, self.pix_size)
+        p0_xyzw = Transforms.eulerXYZ_to_quatXYZW((0, 0, -p0_theta))
+        p1_xyzw = Transforms.eulerXYZ_to_quatXYZW((0, 0, -p1_theta))
 
         return {
             'pose0': (np.asarray(p0_xyz), np.asarray(p0_xyzw)),
