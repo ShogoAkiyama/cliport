@@ -8,7 +8,7 @@ import numpy as np
 import pybullet as p
 
 from cliport.dataset.cameras import RealSenseD415
-from cliport.utils import load_urdf
+from cliport.envs.utils import load_urdf, render_camera
 
 UR5_URDF_PATH = 'ur5/ur5.urdf'
 UR5_WORKSPACE_URDF_PATH = 'ur5/workspace.urdf'
@@ -39,7 +39,11 @@ class Environment(gym.Env):
             "video_width": 720,
         }
 
-        self.obj_ids = {'fixed': [], 'rigid': [], 'deformable': []}
+        self.obj_ids = {
+            'fixed': [],
+            'rigid': [],
+            'deformable': []
+        }
         self.homej = np.array([-1, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi
         self.agent_cams = RealSenseD415.CONFIG
         self.step_counter = 0
@@ -166,7 +170,6 @@ class Environment(gym.Env):
         """
         if action is not None:
             timeout = self.task.primitive(
-                self.movej,
                 self.movep,
                 self.ee,
                 action['pose0'],
@@ -215,9 +218,12 @@ class Environment(gym.Env):
             os.path.join(self.assets_root, urdf),
             pose[0],
             pose[1],
-            useFixedBase=fixed_base)
+            useFixedBase=fixed_base
+        )
+
         if not obj_id is None:
             self.obj_ids[category].append(obj_id)
+
         return obj_id
 
     def seed(self, seed=None):
@@ -235,62 +241,6 @@ class Environment(gym.Env):
             raise NotImplementedError('Only rgb_array implemented')
         color, _, _ = self.render_camera(self.agent_cams[0])
         return color
-
-    def render_camera(self, config, image_size=None, shadow=1):
-        """Render RGB-D image with specified camera configuration."""
-        if not image_size:
-            image_size = config['image_size']
-
-        # OpenGL camera settings.
-        lookdir = np.float32([0, 0, 1]).reshape(3, 1)
-        updir = np.float32([0, -1, 0]).reshape(3, 1)
-        rotation = p.getMatrixFromQuaternion(config['rotation'])
-        rotm = np.float32(rotation).reshape(3, 3)
-        lookdir = (rotm @ lookdir).reshape(-1)
-        updir = (rotm @ updir).reshape(-1)
-        lookat = config['position'] + lookdir
-        focal_len = config['intrinsics'][0]
-        znear, zfar = config['zrange']
-        viewm = p.computeViewMatrix(config['position'], lookat, updir)
-        fovh = (image_size[0] / 2) / focal_len
-        fovh = 180 * np.arctan(fovh) * 2 / np.pi
-
-        # Notes: 1) FOV is vertical FOV 2) aspect must be float
-        aspect_ratio = image_size[1] / image_size[0]
-        projm = p.computeProjectionMatrixFOV(fovh, aspect_ratio, znear, zfar)
-
-        # Render with OpenGL camera settings.
-        _, _, color, depth, segm = p.getCameraImage(
-            width=image_size[1],
-            height=image_size[0],
-            viewMatrix=viewm,
-            projectionMatrix=projm,
-            shadow=shadow,
-            flags=p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX,
-            renderer=p.ER_BULLET_HARDWARE_OPENGL
-        )
-
-        # Get color image.
-        color_image_size = (image_size[0], image_size[1], 4)
-        color = np.array(color, dtype=np.uint8).reshape(color_image_size)
-        color = color[:, :, :3]  # remove alpha channel
-        if config['noise']:
-            color = np.int32(color)
-            color += np.int32(self._random.normal(0, 3, image_size))
-            color = np.uint8(np.clip(color, 0, 255))
-
-        # Get depth image.
-        depth_image_size = (image_size[0], image_size[1])
-        zbuffer = np.array(depth).reshape(depth_image_size)
-        depth = (zfar + znear - (2. * zbuffer - 1.) * (zfar - znear))
-        depth = (2. * znear * zfar) / depth
-        if config['noise']:
-            depth += self._random.normal(0, 0.003, depth_image_size)
-
-        # Get segmentation image.
-        segm = np.uint8(segm).reshape(depth_image_size)
-
-        return color, depth, segm
 
     @property
     def info(self):
@@ -369,12 +319,8 @@ class Environment(gym.Env):
         # Get RGB-D camera image observations.
         obs = {'color': (), 'depth': ()}
         for config in self.agent_cams:
-            color, depth, _ = self.render_camera(config)
+            color, depth, _ = render_camera(config)
             obs['color'] += (color,)
             obs['depth'] += (depth,)
 
         return obs
-
-    def __del__(self):
-        if hasattr(self, 'video_writer'):
-            self.video_writer.close()

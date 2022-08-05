@@ -6,13 +6,12 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from cliport.dataset.utils import (
-    get_fused_heightmap,
-    xyz_to_pix,
-    quatXYZW_to_eulerXYZ,
     perturb,
     apply_perturbation,
 )
 from cliport.dataset.cameras import RealSenseD415
+from cliport.envs.tasks.heightmap import HeightMap
+from cliport.envs.tasks.transform import Transforms
 
 
 class RavensDataset(Dataset):
@@ -137,7 +136,7 @@ class RavensDataset(Dataset):
         """Stack color and height images image."""
 
         # Get color and height maps from RGB-D images.
-        cmap, hmap = get_fused_heightmap(
+        cmap, hmap = HeightMap.get_fused_heightmap(
             obs,
             RealSenseD415.CONFIG,
             self.bounds,
@@ -165,10 +164,10 @@ class RavensDataset(Dataset):
         if act:
             p0_xyz, p0_xyzw = act['pose0']
             p1_xyz, p1_xyzw = act['pose1']
-            p0 = xyz_to_pix(p0_xyz, self.bounds, self.pix_size)
-            p0_theta = -np.float32(quatXYZW_to_eulerXYZ(p0_xyzw)[2])
-            p1 = xyz_to_pix(p1_xyz, self.bounds, self.pix_size)
-            p1_theta = -np.float32(quatXYZW_to_eulerXYZ(p1_xyzw)[2])
+            p0 = Transforms.xyz_to_pix(p0_xyz, self.bounds, self.pix_size)
+            p0_theta = -np.float32(Transforms.quatXYZW_to_eulerXYZ(p0_xyzw)[2])
+            p1 = Transforms.xyz_to_pix(p1_xyz, self.bounds, self.pix_size)
+            p1_theta = -np.float32(Transforms.quatXYZW_to_eulerXYZ(p1_xyzw)[2])
             p1_theta = p1_theta - p0_theta
             p0_theta = 0
 

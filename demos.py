@@ -3,7 +3,7 @@ import random
 
 from cliport.dataset.dataset import RavensDataset
 from cliport.envs.envs import Environment
-from cliport.tasks.packing_boxes_pairs import PackingBoxesPairsSeenColors
+from cliport.envs.tasks.packing_boxes_pairs import PackingBoxesPairsSeenColors
 
 
 def main():
@@ -51,9 +51,9 @@ def main():
 
         episode.append((obs, None, reward, info))
 
-        # Only save completed demonstrations.
-        if total_reward > 0.99:
-            dataset.add(seed, episode)
+        # # Only save completed demonstrations.
+        # if total_reward > 0.99:
+        #     dataset.add(seed, episode)
 
 
 if __name__ == '__main__':
