@@ -2,12 +2,9 @@ import os
 import collections
 import numpy as np
 import cv2
-import random
-import string
-import tempfile
 import pybullet as p
 
-from cliport.envs.tasks.utils import Utils
+from cliport.envs.tasks.utils import Utils, fill_template
 from cliport.envs.tasks.transform import Transforms
 from cliport.envs.tasks.primitives import PickPlace
 from cliport.envs.tasks.grippers import Suction
@@ -153,7 +150,7 @@ class PackingBoxesPairsSeenColors:
         container_template = 'container/container-template.urdf'
         half = np.float32(zone_size) / 2
         replace = {'DIM': zone_size, 'HALF': half}
-        container_urdf = self.fill_template(container_template, replace)
+        container_urdf = fill_template(self.assets_root, container_template, replace)
         env.add_object(container_urdf, zone_pose, 'fixed')
         if os.path.exists(container_urdf):
             os.remove(container_urdf)
@@ -224,7 +221,7 @@ class PackingBoxesPairsSeenColors:
             position[1] += -zone_size[1] / 2
             pose = (position, (0, 0, 0, 1))
             pose = Utils.multiply(zone_pose, pose)
-            urdf = self.fill_template(object_template, {'DIM': size})
+            urdf = fill_template(self.assets_root, object_template, {'DIM': size})
             box_id = env.add_object(urdf, pose)
 
             if os.path.exists(urdf):
@@ -257,7 +254,7 @@ class PackingBoxesPairsSeenColors:
             position[1] += -zone_size[1] / 2
 
             pose = self.get_random_pose(env, size)
-            urdf = self.fill_template(object_template, {'DIM': size})
+            urdf = fill_template(self.assets_root, object_template, {'DIM': size})
             box_id = env.add_object(urdf, pose)
             if os.path.exists(urdf):
                 os.remove(urdf)
@@ -328,131 +325,6 @@ class PackingBoxesPairsSeenColors:
 
         return (dist_pos < self.pos_eps) and (diff_rot < self.rot_eps)
 
-    def oracle(self, env):
-        """Oracle agent."""
-        OracleAgent = collections.namedtuple('OracleAgent', ['act'])
-
-        def act(obs, info):  # pylint: disable=unused-argument
-            """Calculate action."""
-
-            # Oracle uses perfect RGB-D orthographic images and segmentation masks.
-            _, hmap, obj_mask = get_true_image()
-
-            # Unpack next goal step.
-            objs, matches, targs, replace, rotations, _, _, _ = self.goals[0]
-
-            # Match objects to targets without replacement.
-            if not replace:
-
-                # Modify a copy of the match matrix.
-                matches = matches.copy()
-
-                # Ignore already matched objects.
-                for i in range(len(objs)):
-                    object_id, (symmetry, _) = objs[i]
-                    pose = p.getBasePositionAndOrientation(object_id)
-                    targets_i = np.argwhere(matches[i, :]).reshape(-1)
-                    for j in targets_i:
-                        if self.is_match(pose, targs[j], symmetry):
-                            matches[i, :] = 0
-                            matches[:, j] = 0
-
-            # Get objects to be picked (prioritize farthest from nearest neighbor).
-            nn_dists = []
-            nn_targets = []
-            for i in range(len(objs)):
-                object_id, (symmetry, _) = objs[i]
-                xyz, _ = p.getBasePositionAndOrientation(object_id)
-                targets_i = np.argwhere(matches[i, :]).reshape(-1)
-                if len(targets_i) > 0:  # pylint: disable=g-explicit-length-test
-                    targets_xyz = np.float32([targs[j][0] for j in targets_i])
-                    dists = np.linalg.norm(
-                        targets_xyz - np.float32(xyz).reshape(1, 3), axis=1)
-                    nn = np.argmin(dists)
-                    nn_dists.append(dists[nn])
-                    nn_targets.append(targets_i[nn])
-
-                # Handle ignored objects.
-                else:
-                    nn_dists.append(0)
-                    nn_targets.append(-1)
-
-            order = np.argsort(nn_dists)[::-1]
-
-            # Filter out matched objects.
-            order = [i for i in order if nn_dists[i] > 0]
-
-            pick_mask = None
-            for pick_i in order:
-                pick_mask = np.uint8(obj_mask == objs[pick_i][0])
-
-                # Erode to avoid picking on edges.
-                # pick_mask = cv2.erode(pick_mask, np.ones((3, 3), np.uint8))
-
-                if np.sum(pick_mask) > 0:
-                    break
-
-            # Trigger task reset if no object is visible.
-            if pick_mask is None or np.sum(pick_mask) == 0:
-                self.goals = []
-                self.lang_goals = []
-                print('Object for pick is not visible. Skipping demonstration.')
-                return
-
-            # Get picking pose.
-            pick_prob = np.float32(pick_mask)
-            pick_pix = Random.sample_distribution(pick_prob)
-            # For "deterministic" demonstrations on insertion-easy, use this:
-            # pick_pix = (160,80)
-            pick_pos = Transforms.pix_to_xyz(
-                pick_pix,
-                hmap,
-                self.bounds,
-                self.pix_size
-            )
-            pick_pose = (np.asarray(pick_pos), np.asarray((0, 0, 0, 1)))
-
-            # Get placing pose.
-            targ_pose = targs[nn_targets[pick_i]]  # pylint: disable=undefined-loop-variable
-            obj_pose = p.getBasePositionAndOrientation(objs[pick_i][0])  # pylint: disable=undefined-loop-variable
-
-            if not self.sixdof:
-                obj_euler = Transforms.quatXYZW_to_eulerXYZ(obj_pose[1])
-                obj_quat = Transforms.eulerXYZ_to_quatXYZW((0, 0, obj_euler[2]))
-                obj_pose = (obj_pose[0], obj_quat)
-
-            world_to_pick = Utils.invert(pick_pose)
-            obj_to_pick = Utils.multiply(world_to_pick, obj_pose)
-            pick_to_obj = Utils.invert(obj_to_pick)
-            place_pose = Utils.multiply(targ_pose, pick_to_obj)
-
-            # Rotate end effector?
-            if not rotations:
-                place_pose = (place_pose[0], (0, 0, 0, 1))
-
-            place_pose = (np.asarray(place_pose[0]), np.asarray(place_pose[1]))
-
-            return {'pose0': pick_pose, 'pose1': place_pose}
-
-        return OracleAgent(act)
-
-    def fill_template(self, template, replace):
-        """Read a file and replace key strings."""
-        full_template_path = os.path.join(self.assets_root, template)
-        with open(full_template_path, 'r') as file:
-            fdata = file.read()
-        for field in replace:
-            for i in range(len(replace[field])):
-                fdata = fdata.replace(f'{field}{i}', str(replace[field][i]))
-        alphabet = string.ascii_lowercase + string.digits
-        rname = ''.join(random.choices(alphabet, k=16))
-        tmpdir = tempfile.gettempdir()
-        template_filename = os.path.split(template)[-1]
-        fname = os.path.join(tmpdir, f'{template_filename}.{rname}')
-        with open(fname, 'w') as file:
-            file.write(fdata)
-        return fname
-
     def get_box_object_points(self, obj):
         obj_shape = p.getVisualShapeData(obj)
         obj_dim = obj_shape[0][3]
@@ -463,3 +335,111 @@ class PackingBoxesPairsSeenColors:
             np.arange(-obj_dim[2] / 2, obj_dim[2] / 2, 0.02),
             sparse=False, indexing='xy')
         return np.vstack((xv.reshape(1, -1), yv.reshape(1, -1), zv.reshape(1, -1)))
+
+    def oracle(self):
+        """Oracle agent."""
+        OracleAgent = collections.namedtuple('OracleAgent', ['act'])
+
+        return OracleAgent(self.act)
+
+    def act(self):  # pylint: disable=unused-argument
+        """Calculate action."""
+
+        # Oracle uses perfect RGB-D orthographic images and segmentation masks.
+        _, hmap, obj_mask = get_true_image()
+
+        # Unpack next goal step.
+        objs, matches, targs, replace, rotations, _, _, _ = self.goals[0]
+
+        # Match objects to targets without replacement.
+        if not replace:
+
+            # Modify a copy of the match matrix.
+            matches = matches.copy()
+
+            # Ignore already matched objects.
+            for i in range(len(objs)):
+                object_id, (symmetry, _) = objs[i]
+                pose = p.getBasePositionAndOrientation(object_id)
+                targets_i = np.argwhere(matches[i, :]).reshape(-1)
+                for j in targets_i:
+                    if self.is_match(pose, targs[j], symmetry):
+                        matches[i, :] = 0
+                        matches[:, j] = 0
+
+        # Get objects to be picked (prioritize farthest from nearest neighbor).
+        nn_dists = []
+        nn_targets = []
+        for i in range(len(objs)):
+            object_id, (symmetry, _) = objs[i]
+            xyz, _ = p.getBasePositionAndOrientation(object_id)
+            targets_i = np.argwhere(matches[i, :]).reshape(-1)
+            if len(targets_i) > 0:  # pylint: disable=g-explicit-length-test
+                targets_xyz = np.float32([targs[j][0] for j in targets_i])
+                dists = np.linalg.norm(
+                    targets_xyz - np.float32(xyz).reshape(1, 3), axis=1)
+                nn = np.argmin(dists)
+                nn_dists.append(dists[nn])
+                nn_targets.append(targets_i[nn])
+
+            # Handle ignored objects.
+            else:
+                nn_dists.append(0)
+                nn_targets.append(-1)
+
+        order = np.argsort(nn_dists)[::-1]
+
+        # Filter out matched objects.
+        order = [i for i in order if nn_dists[i] > 0]
+
+        pick_mask = None
+        for pick_i in order:
+            pick_mask = np.uint8(obj_mask == objs[pick_i][0])
+
+            # Erode to avoid picking on edges.
+            # pick_mask = cv2.erode(pick_mask, np.ones((3, 3), np.uint8))
+
+            if np.sum(pick_mask) > 0:
+                break
+
+        # Trigger task reset if no object is visible.
+        if pick_mask is None or np.sum(pick_mask) == 0:
+            self.goals = []
+            self.lang_goals = []
+            print('Object for pick is not visible. Skipping demonstration.')
+            return
+
+        # Get picking pose.
+        pick_prob = np.float32(pick_mask)
+        pick_pix = Random.sample_distribution(pick_prob)
+        # For "deterministic" demonstrations on insertion-easy, use this:
+        # pick_pix = (160,80)
+        pick_pos = Transforms.pix_to_xyz(
+            pick_pix,
+            hmap,
+            self.bounds,
+            self.pix_size
+        )
+        pick_pose = (np.asarray(pick_pos), np.asarray((0, 0, 0, 1)))
+
+        # Get placing pose.
+        targ_pose = targs[nn_targets[pick_i]]  # pylint: disable=undefined-loop-variable
+        obj_pose = p.getBasePositionAndOrientation(objs[pick_i][0])  # pylint: disable=undefined-loop-variable
+
+        if not self.sixdof:
+            obj_euler = Transforms.quatXYZW_to_eulerXYZ(obj_pose[1])
+            obj_quat = Transforms.eulerXYZ_to_quatXYZW((0, 0, obj_euler[2]))
+            obj_pose = (obj_pose[0], obj_quat)
+
+        world_to_pick = Utils.invert(pick_pose)
+        obj_to_pick = Utils.multiply(world_to_pick, obj_pose)
+        pick_to_obj = Utils.invert(obj_to_pick)
+        place_pose = Utils.multiply(targ_pose, pick_to_obj)
+
+        # Rotate end effector?
+        if not rotations:
+            place_pose = (place_pose[0], (0, 0, 0, 1))
+
+        place_pose = (np.asarray(place_pose[0]), np.asarray(place_pose[1]))
+
+        return {'pose0': pick_pose, 'pose1': place_pose}

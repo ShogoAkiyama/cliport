@@ -11,7 +11,7 @@ def main():
     task = PackingBoxesPairsSeenColors()
 
     # Initialize scripted oracle agent and dataset.
-    agent = task.oracle(env)
+    agent = task.oracle()
     data_path = "./data/packing-boxes-pairs-seen-colors-train"
     dataset = RavensDataset(data_path, n_demos=0)
 
@@ -38,7 +38,7 @@ def main():
 
         # Rollout expert policy
         for _ in range(task.max_steps):
-            act = agent.act(obs, info)
+            act = agent.act()
             episode.append((obs, act, reward, info))
             lang_goal = info['lang_goal']
             obs, reward, done, info = env.step(act)
