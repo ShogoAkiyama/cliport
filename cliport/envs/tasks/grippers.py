@@ -58,30 +58,6 @@ class Suction(Gripper):
     """Simulate simple suction dynamics."""
 
     def __init__(self, assets_root, robot, ee, obj_ids):
-        """Creates suction and 'attaches' it to the robot.
-    
-        Has special cases when dealing with rigid vs deformables. For rigid,
-        only need to check contact_constraint for any constraint. For soft
-        bodies (i.e., cloth or bags), use cloth_threshold to check distances
-        from gripper body (self.body) to any vertex in the cloth mesh. We
-        need correct code logic to handle gripping potentially a rigid or a
-        deformable (and similarly for releasing).
-    
-        To be clear on terminology: 'deformable' here should be interpreted
-        as a PyBullet 'softBody', which includes cloths and bags. There's
-        also cables, but those are formed by connecting rigid body beads, so
-        they can use standard 'rigid body' grasping code.
-    
-        To get the suction gripper pose, use p.getLinkState(self.body, 0),
-        and not p.getBasePositionAndOrientation(self.body) as the latter is
-        about z=0.03m higher and empirically seems worse.
-    
-        Args:
-            assets_root: str for root directory with assets.
-            robot: int representing PyBullet ID of robot.
-            ee: int representing PyBullet ID of end effector link.
-            obj_ids: list of PyBullet IDs of all suctionable objects in the env.
-        """
         super().__init__(assets_root)
 
         # Load suction gripper base model (visual only).
@@ -164,6 +140,7 @@ class Suction(Gripper):
                 # Handle contact between suction with a rigid object.
                 for point in points:
                     obj_id, contact_link = point[2], point[4]
+
                 if obj_id in self.obj_ids['rigid']:
                     body_pose = p.getLinkState(self.body, 0)
                     obj_pose = p.getBasePositionAndOrientation(obj_id)
@@ -188,16 +165,6 @@ class Suction(Gripper):
                 self.activated = True
 
     def release(self):
-        """Release gripper object, only applied if gripper is 'activated'.
-    
-        If suction off, detect contact between gripper and objects.
-        If suction on, detect contact between picked object and other objects.
-    
-        To handle deformables, simply remove constraints (i.e., anchors).
-        Also reset any relevant variables, e.g., if releasing a rigid, we
-        should reset init_grip values back to None, which will be re-assigned
-        in any subsequent grasps.
-        """
         if self.activated:
             self.activated = False
 
@@ -221,7 +188,6 @@ class Suction(Gripper):
                 self.def_min_distance = None
 
     def detect_contact(self):
-        """Detects a contact with a rigid object."""
         body, link = self.body, 0
         if self.activated and self.contact_constraint is not None:
             try:
@@ -233,8 +199,7 @@ class Suction(Gripper):
 
         # Get all contact points between the suction and a rigid body.
         points = p.getContactPoints(bodyA=body, linkIndexA=link)
-        # print(points)
-        # exit()
+
         if self.activated:
             points = [point for point in points if point[2] != self.body]
 
@@ -245,8 +210,6 @@ class Suction(Gripper):
         return False
 
     def check_grasp(self):
-        """Check a grasp (object in contact?) for picking success."""
-
         suctioned_object = None
         if self.contact_constraint is not None:
             suctioned_object = p.getConstraintInfo(self.contact_constraint)[2]

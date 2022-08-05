@@ -4,12 +4,12 @@ import numpy as np
 import cv2
 import pybullet as p
 
-from cliport.envs.tasks.utils import Utils, fill_template
+from cliport.envs.tasks.utils import Utils
 from cliport.envs.tasks.transform import Transforms
 from cliport.envs.tasks.primitives import PickPlace
-from cliport.envs.tasks.grippers import Suction
 from cliport.envs.tasks.oracle import get_true_image
 from cliport.envs.tasks.random import Random
+from cliport.envs.utils import load_urdf
 
 
 TRAIN_COLORS = ['blue', 'red', 'green', 'yellow', 'brown', 'gray', 'cyan']
@@ -41,7 +41,6 @@ class PackingBoxesPairsSeenColors:
         # Tight z-bound (0.0525) to discourage stuffing everything into the brown box
         self.zone_bounds = np.array([[0.25, 0.75], [-0.5, 0.5], [0, 0.0525]])
 
-        self.ee = Suction
         self.mode = 'train'
         self.sixdof = False
         self.primitive = PickPlace()
@@ -62,6 +61,12 @@ class PackingBoxesPairsSeenColors:
         self._rewards = 0
 
         self.assets_root = "./cliport/envs/assets/"
+
+        self.obj_ids = {
+            'fixed': [],
+            'rigid': [],
+            'deformable': []
+        }
 
     def done(self):
         return len(self.goals) == 0 or self._rewards > 0.99
@@ -96,10 +101,10 @@ class PackingBoxesPairsSeenColors:
         elif metric == 'zone':
             zone_pts, total_pts = 0, 0
             obj_pts, zones = params
-            for zone_idx, (zone_pose, zone_size) in enumerate(zones):
+            for zone_pose, zone_size in zones:
 
                 # Count valid points in zone.
-                for obj_idx, obj_id in enumerate(obj_pts):
+                for obj_id in obj_pts:
                     pts = obj_pts[obj_id]
                     obj_pose = p.getBasePositionAndOrientation(obj_id)
                     world_to_zone = Utils.invert(zone_pose)
@@ -135,9 +140,15 @@ class PackingBoxesPairsSeenColors:
         else:
             return self.lang_goals[0]
 
-    def reset(self, env):
+    def reset(self):
         if not self.assets_root:
             raise ValueError('assets_root must be set for task, call set_assets_root().')
+
+        self.obj_ids = {
+            'fixed': [],
+            'rigid': [],
+            'deformable': []
+        }
 
         self.goals = []
         self.lang_goals = []
@@ -146,12 +157,16 @@ class PackingBoxesPairsSeenColors:
 
         # Add container box.
         zone_size = Random.get_random_size(0.05, 0.3, 0.05, 0.3, 0.05, 0.05)
-        zone_pose = self.get_random_pose(env, zone_size)
+        zone_pose = self.get_random_pose(zone_size)
         container_template = 'container/container-template.urdf'
         half = np.float32(zone_size) / 2
         replace = {'DIM': zone_size, 'HALF': half}
-        container_urdf = fill_template(self.assets_root, container_template, replace)
-        env.add_object(container_urdf, zone_pose, 'fixed')
+        container_urdf = Utils.fill_template(
+            self.assets_root,
+            container_template,
+            replace
+        )
+        self.add_object(container_urdf, zone_pose, 'fixed')
         if os.path.exists(container_urdf):
             os.remove(container_urdf)
 
@@ -160,7 +175,6 @@ class PackingBoxesPairsSeenColors:
         bboxes = []
 
         class TreeNode:
-
             def __init__(self, parent, children, bbox):
                 self.parent = parent
                 self.children = children
@@ -221,8 +235,12 @@ class PackingBoxesPairsSeenColors:
             position[1] += -zone_size[1] / 2
             pose = (position, (0, 0, 0, 1))
             pose = Utils.multiply(zone_pose, pose)
-            urdf = fill_template(self.assets_root, object_template, {'DIM': size})
-            box_id = env.add_object(urdf, pose)
+            urdf = Utils.fill_template(
+                self.assets_root,
+                object_template,
+                {'DIM': size}
+            )
+            box_id = self.add_object(urdf, pose)
 
             if os.path.exists(urdf):
                 os.remove(urdf)
@@ -239,7 +257,7 @@ class PackingBoxesPairsSeenColors:
             true_pose = p.getBasePositionAndOrientation(object_id)
             object_size = p.getVisualShapeData(object_id)[0][3]
             object_volumes.append(np.prod(np.array(object_size) * 100))
-            pose = self.get_random_pose(env, object_size)
+            pose = self.get_random_pose(object_size)
             p.resetBasePositionAndOrientation(object_id, pose[0], pose[1])
             true_poses.append(true_pose)
 
@@ -253,14 +271,22 @@ class PackingBoxesPairsSeenColors:
             position[0] += -zone_size[0] / 2
             position[1] += -zone_size[1] / 2
 
-            pose = self.get_random_pose(env, size)
-            urdf = fill_template(self.assets_root, object_template, {'DIM': size})
-            box_id = env.add_object(urdf, pose)
+            pose = self.get_random_pose(size)
+            urdf = Utils.fill_template(
+                self.assets_root,
+                object_template,
+                {'DIM': size}
+            )
+            box_id = self.add_object(urdf, pose)
             if os.path.exists(urdf):
                 os.remove(urdf)
             icolor = np.random.choice(range(len(distractor_colors)), 1).squeeze()
             if box_id:
-                p.changeVisualShape(box_id, -1, rgbaColor=distractor_colors[icolor] + [1])
+                p.changeVisualShape(
+                    box_id,
+                    -1,
+                    rgbaColor=distractor_colors[icolor] + [1]
+                )
 
         # Some scenes might contain just one relevant block that fits in the box.
         if len(relevant_color_names) > 1:
@@ -282,7 +308,7 @@ class PackingBoxesPairsSeenColors:
             colors=relevant_desc,
         ))
 
-    def get_random_pose(self, env, obj_size):
+    def get_random_pose(self, obj_size):
         """Get random collision-free object pose within workspace bounds."""
 
         # Get erosion size of object in pixels.
@@ -293,7 +319,7 @@ class PackingBoxesPairsSeenColors:
 
         # Randomly sample an object pose within free-space pixels.
         free = np.ones(obj_mask.shape, dtype=np.uint8)
-        for obj_ids in env.obj_ids.values():
+        for obj_ids in self.obj_ids.values():
             for obj_id in obj_ids:
                 free[obj_mask == obj_id] = 0
         free[0, :], free[:, 0], free[-1, :], free[:, -1] = 0, 0, 0, 0
@@ -333,8 +359,14 @@ class PackingBoxesPairsSeenColors:
             np.arange(-obj_dim[0] / 2, obj_dim[0] / 2, 0.02),
             np.arange(-obj_dim[1] / 2, obj_dim[1] / 2, 0.02),
             np.arange(-obj_dim[2] / 2, obj_dim[2] / 2, 0.02),
-            sparse=False, indexing='xy')
-        return np.vstack((xv.reshape(1, -1), yv.reshape(1, -1), zv.reshape(1, -1)))
+            sparse=False,
+            indexing='xy'
+        )
+        return np.vstack((
+            xv.reshape(1, -1),
+            yv.reshape(1, -1),
+            zv.reshape(1, -1)
+        ))
 
     def oracle(self):
         """Oracle agent."""
@@ -374,6 +406,7 @@ class PackingBoxesPairsSeenColors:
             object_id, (symmetry, _) = objs[i]
             xyz, _ = p.getBasePositionAndOrientation(object_id)
             targets_i = np.argwhere(matches[i, :]).reshape(-1)
+
             if len(targets_i) > 0:  # pylint: disable=g-explicit-length-test
                 targets_xyz = np.float32([targs[j][0] for j in targets_i])
                 dists = np.linalg.norm(
@@ -443,3 +476,19 @@ class PackingBoxesPairsSeenColors:
         place_pose = (np.asarray(place_pose[0]), np.asarray(place_pose[1]))
 
         return {'pose0': pick_pose, 'pose1': place_pose}
+
+    def add_object(self, urdf, pose, category='rigid'):
+        """List of (fixed, rigid, or deformable) objects in env."""
+        fixed_base = 1 if category == 'fixed' else 0
+        obj_id = load_urdf(
+            p,
+            os.path.join(self.assets_root, urdf),
+            pose[0],
+            pose[1],
+            useFixedBase=fixed_base
+        )
+
+        if not obj_id is None:
+            self.obj_ids[category].append(obj_id)
+
+        return obj_id

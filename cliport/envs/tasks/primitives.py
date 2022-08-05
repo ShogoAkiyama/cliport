@@ -11,18 +11,6 @@ class PickPlace():
         self.height, self.speed = height, speed
 
     def __call__(self, movep, ee, pose0, pose1):
-        """Execute pick and place primitive.
-        Args:
-            movej: function to move robot joints.
-            movep: function to move robot end effector pose.
-            ee: robot end effector.
-            pose0: SE(3) picking pose.
-            pose1: SE(3) placing pose.
-    
-        Returns:
-            timeout: robot movement timed out if True.
-        """
-
         pick_pose, place_pose = pose0, pose1
 
         # Execute picking primitive.

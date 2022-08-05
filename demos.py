@@ -3,15 +3,13 @@ import random
 
 from cliport.dataset.dataset import RavensDataset
 from cliport.envs.envs import Environment
-from cliport.envs.tasks.packing_boxes_pairs import PackingBoxesPairsSeenColors
 
 
 def main():
     env = Environment()
-    task = PackingBoxesPairsSeenColors()
 
     # Initialize scripted oracle agent and dataset.
-    agent = task.oracle()
+    agent = env.task.oracle()
     data_path = "./data/packing-boxes-pairs-seen-colors-train"
     dataset = RavensDataset(data_path, n_demos=0)
 
@@ -31,13 +29,13 @@ def main():
         np.random.seed(seed)
         random.seed(seed)
 
-        env.set_task(task)
+        # env.set_task(task)
         obs = env.reset()
         info = env.info
         reward = 0
 
         # Rollout expert policy
-        for _ in range(task.max_steps):
+        for _ in range(env.task.max_steps):
             act = agent.act()
             episode.append((obs, act, reward, info))
             lang_goal = info['lang_goal']

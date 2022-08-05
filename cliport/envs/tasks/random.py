@@ -5,7 +5,6 @@ class Random:
 
     @classmethod
     def get_random_size(cls, min_x, max_x, min_y, max_y, min_z, max_z):
-        """Get random box size."""
         size = np.random.rand(3)
         size[0] = size[0] * (max_x - min_x) + min_x
         size[1] = size[1] * (max_y - min_y) + min_y
@@ -14,7 +13,6 @@ class Random:
 
     @classmethod
     def sample_distribution(cls, prob, n_samples=1):
-        """Sample data point from a custom distribution."""
         flat_prob = prob.flatten() / np.sum(prob)
         rand_ind = np.random.choice(
             np.arange(len(flat_prob)),

@@ -8,7 +8,9 @@ import numpy as np
 import pybullet as p
 
 from cliport.dataset.cameras import RealSenseD415
+from cliport.envs.tasks.packing_boxes_pairs import PackingBoxesPairsSeenColors
 from cliport.envs.utils import load_urdf, render_camera
+from cliport.envs.tasks.grippers import Suction
 
 UR5_URDF_PATH = 'ur5/ur5.urdf'
 UR5_WORKSPACE_URDF_PATH = 'ur5/workspace.urdf'
@@ -19,30 +21,12 @@ class Environment(gym.Env):
     """OpenAI Gym-style environment class."""
 
     def __init__(self):
-        """Creates OpenAI Gym-style environment with PyBullet.
-        Args:
-            assets_root: root directory of assets.
-            task: the task to use. If None, the user must call set_task for the
-            environment to work properly.
-            disp: show environment with PyBullet's built-in display viewer.
-            shared_memory: run with shared memory.
-            hz: PyBullet physics simulation step speed. Set to 480 for deformables.
-        Raises:
-            RuntimeError: if pybullet cannot load fileIOPlugin.
-        """
-
         self.assets_root = "./cliport/envs/assets/"
         hz = 480
         self.record_cfg = {
             "fps": 20,
             "video_height": 640,
             "video_width": 720,
-        }
-
-        self.obj_ids = {
-            'fixed': [],
-            'rigid': [],
-            'deformable': []
         }
         self.homej = np.array([-1, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi
         self.agent_cams = RealSenseD415.CONFIG
@@ -102,6 +86,8 @@ class Environment(gym.Env):
         p.setAdditionalSearchPath(tempfile.gettempdir())
         p.setTimeStep(1. / hz)
 
+        self.task = PackingBoxesPairsSeenColors()
+
     def reset(self):
         """Performs common reset functionality for all supported tasks."""
         if not self.task:
@@ -109,7 +95,7 @@ class Environment(gym.Env):
                 'environment task must be set. Call set_task or pass '
                 'the task arg in the environment constructor.'
             )
-        self.obj_ids = {'fixed': [], 'rigid': [], 'deformable': []}
+
         p.resetSimulation(p.RESET_USE_DEFORMABLE_WORLD)
         p.setGravity(0, 0, -9.8)
 
@@ -127,6 +113,9 @@ class Environment(gym.Env):
             [0.5, 0, 0]
         )
 
+        # Reset task.
+        self.task.reset()
+
         # Load UR5 robot arm equipped with suction end effector.
         # TODO(andyzeng): add back parallel-jaw grippers.
         self.ur5 = load_urdf(
@@ -136,8 +125,16 @@ class Environment(gym.Env):
 
         assert self.ur5 is not None
 
-        self.ee = self.task.ee(self.assets_root, self.ur5, 9, self.obj_ids)
+        self.ee = Suction(
+            self.assets_root,
+            self.ur5,
+            9,
+            self.task.obj_ids
+        )
         self.ee_tip = 10  # Link ID of suction cup.
+
+        # Reset end effector.
+        self.ee.release()
 
         # Get revolute joint indices of robot (skip fixed joints).
         n_joints = p.getNumJoints(self.ur5)
@@ -148,12 +145,6 @@ class Environment(gym.Env):
         for i in range(len(self.joints)):
             p.resetJointState(self.ur5, self.joints[i], self.homej[i])
 
-        # Reset end effector.
-        self.ee.release()
-
-        # Reset task.
-        self.task.reset(self)
-
         # Re-enable rendering.
         p.configureDebugVisualizer(p.COV_ENABLE_RENDERING, 1)
 
@@ -162,12 +153,7 @@ class Environment(gym.Env):
         return obs
 
     def step(self, action=None):
-        """Execute action with specified primitive.
-        Args:
-            action: action to execute.
-        Returns:
-            (obs, reward, done, info) tuple containing MDP step data.
-        """
+
         if action is not None:
             timeout = self.task.primitive(
                 self.movep,
@@ -206,25 +192,9 @@ class Environment(gym.Env):
         """Return true if objects are no longer moving."""
         v = [
             np.linalg.norm(p.getBaseVelocity(i)[0])
-            for i in self.obj_ids['rigid']
+            for i in self.task.obj_ids['rigid']
         ]
         return all(np.array(v) < 5e-3)
-
-    def add_object(self, urdf, pose, category='rigid'):
-        """List of (fixed, rigid, or deformable) objects in env."""
-        fixed_base = 1 if category == 'fixed' else 0
-        obj_id = load_urdf(
-            p,
-            os.path.join(self.assets_root, urdf),
-            pose[0],
-            pose[1],
-            useFixedBase=fixed_base
-        )
-
-        if not obj_id is None:
-            self.obj_ids[category].append(obj_id)
-
-        return obj_id
 
     def seed(self, seed=None):
         self._random = np.random.RandomState(seed)
@@ -235,8 +205,6 @@ class Environment(gym.Env):
         self.step_counter += 1
 
     def render(self, mode='rgb_array'):
-        # Render only the color image from the first camera.
-        # Only support rgb_array for now.
         if mode != 'rgb_array':
             raise NotImplementedError('Only rgb_array implemented')
         color, _, _ = self.render_camera(self.agent_cams[0])
@@ -244,9 +212,8 @@ class Environment(gym.Env):
 
     @property
     def info(self):
-        """Environment info variable with object poses, dimensions, and colors."""
         info = {}  # object id : (position, rotation, dimensions)
-        for obj_ids in self.obj_ids.values():
+        for obj_ids in self.task.obj_ids.values():
             for obj_id in obj_ids:
                 pos, rot = p.getBasePositionAndOrientation(obj_id)
                 dim = p.getVisualShapeData(obj_id)[0][3]
@@ -255,9 +222,6 @@ class Environment(gym.Env):
         info['lang_goal'] = self.get_lang_goal()
         return info
 
-    def set_task(self, task):
-        self.task = task
-
     def get_lang_goal(self):
         if self.task:
             return self.task.get_lang_goal()
@@ -265,8 +229,6 @@ class Environment(gym.Env):
             raise Exception("No task for was set")
 
     def movej(self, targj, speed=0.01, timeout=5):
-        """Move UR5 to target joint configuration."""
-
         t0 = time.time()
         while (time.time() - t0) < timeout:
             currj = [p.getJointState(self.ur5, i)[0] for i in self.joints]
@@ -285,7 +247,8 @@ class Environment(gym.Env):
                 jointIndices=self.joints,
                 controlMode=p.POSITION_CONTROL,
                 targetPositions=stepj,
-                positionGains=gains)
+                positionGains=gains
+            )
             self.step_counter += 1
             self.step_simulation()
 
@@ -317,7 +280,10 @@ class Environment(gym.Env):
 
     def _get_obs(self):
         # Get RGB-D camera image observations.
-        obs = {'color': (), 'depth': ()}
+        obs = {
+            'color': (),
+            'depth': ()
+        }
         for config in self.agent_cams:
             color, depth, _ = render_camera(config)
             obs['color'] += (color,)

@@ -26,19 +26,6 @@ class HeightMap:
 
     @classmethod
     def get_heightmap(cls, points, colors, bounds, pixel_size):
-        """Get top-down (z-axis) orthographic heightmap image from 3D pointcloud.
-
-        Args:
-            points: HxWx3 float array of 3D points in world coordinates.
-            colors: HxWx3 uint8 array of values in range 0-255 aligned with points.
-            bounds: 3x2 float array of values (rows: X,Y,Z; columns: min,max) defining
-                region in 3D space to generate heightmap in world coordinates.
-            pixel_size: float defining size of each pixel in meters.
-
-        Returns:
-            heightmap: HxW float array of height (from lower z-bound) in meters.
-            colormap: HxWx3 uint8 array of backprojected color aligned with heightmap.
-        """
         width = int(np.round((bounds[0, 1] - bounds[0, 0]) / pixel_size))
         height = int(np.round((bounds[1, 1] - bounds[1, 0]) / pixel_size))
         heightmap = np.zeros((height, width), dtype=np.float32)
